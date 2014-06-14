@@ -1,0 +1,41 @@
+#!/usr/bin/env ruby
+
+require 'fog'
+require 'mysql2'
+
+def backup
+  start = Time.now
+  # Flush and lock all the DB tables. Rails will block on actions that write to the DB
+  # until the tables are unlocked. This should be transparent to web users, aside from
+  # a short delay in the app response time. Entire backup task only takes a few seconds.
+  client = Mysql2::Client.new(username: 'root', password: '<%= node[:mysql][:server_root_password] %>')
+  client.query("FLUSH TABLES WITH READ LOCK")
+  # Fush Ext3 file system cache to disk
+  system("sync")
+  # Create EBS snapshot. We only have one instance and one EBS volume, just select that volume
+  fog = Fog::Compute::AWS.new :use_iam_profile => true
+  volume = fog.servers.get('<%= node[:opsworks][:instance][:aws_instance_id] %>').volumes.first
+  puts "Creating snapshot of #{volume.id}."
+  volume.snapshots.new(description: "Nightly backup of <%= node[:opsworks][:stack][:name] %>").save
+  # unlock tables
+  client.query("UNLOCK TABLES")
+  puts "System backup completed in %.1f seconds." % [Time.now - start]
+end
+
+def clean
+  start = Time.now
+  fog = Fog::Compute::AWS.new :use_iam_profile => true
+  fog.servers.get('<%= node[:opsworks][:instance][:aws_instance_id] %>').volumes.first.snapshots.each do |snapshot|
+    # Keep daily snapshots for the last month and then monthly snapshots after that
+    if snapshot.created_at.to_date < (Date.today - 31) && snapshot.created_at.day!=1
+      puts "DELETING #{snapshot.id} (#{snapshot.created_at.strftime('%b %-d, %Y')}) for #{snapshot.volume_id} (#{snapshot.volume_size}mb)"
+      fog.delete_snapshot(snapshot.id)
+    else
+      puts "Keeping #{snapshot.id} (#{snapshot.created_at.strftime('%b %-d, %Y')}) for #{snapshot.volume_id} (#{snapshot.volume_size}mb)"
+    end
+  end
+  puts "Clean backups completed in %.1f seconds." % [Time.now - start]
+end
+
+backup
+clean
