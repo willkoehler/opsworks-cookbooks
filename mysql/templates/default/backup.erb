@@ -12,9 +12,8 @@ def backup
   client.query("FLUSH TABLES WITH READ LOCK")
   # Fush Ext3 file system cache to disk
   system("sync")
-  # Create EBS snapshot. We only have one instance and one EBS volume, just select that volume
-  fog = Fog::Compute::AWS.new :use_iam_profile => true
-  volume = fog.servers.get('<%= node[:opsworks][:instance][:aws_instance_id] %>').volumes.first
+  # Create EBS snapshot.
+  volume = get_mysql_volume
   puts "Creating snapshot of #{volume.id}."
   volume.snapshots.new(description: "Nightly backup of <%= node[:opsworks][:stack][:name] %>").save
   # unlock tables
@@ -25,16 +24,24 @@ end
 def clean
   start = Time.now
   fog = Fog::Compute::AWS.new :use_iam_profile => true
-  fog.servers.get('<%= node[:opsworks][:instance][:aws_instance_id] %>').volumes.first.snapshots.each do |snapshot|
+  get_mysql_volume.snapshots.each do |snapshot|
     # Keep daily snapshots for the last month and then monthly snapshots after that
     if snapshot.created_at.to_date < (Date.today - 31) && snapshot.created_at.day!=1
-      puts "DELETING #{snapshot.id} (#{snapshot.created_at.strftime('%b %-d, %Y')}) for #{snapshot.volume_id} (#{snapshot.volume_size}mb)"
+      puts "DELETING #{snapshot.id} (#{snapshot.created_at.strftime('%b %-d, %Y')}) for #{snapshot.volume_id} (#{snapshot.volume_size}GB)"
       fog.delete_snapshot(snapshot.id)
     else
-      puts "Keeping #{snapshot.id} (#{snapshot.created_at.strftime('%b %-d, %Y')}) for #{snapshot.volume_id} (#{snapshot.volume_size}mb)"
+      puts "Keeping #{snapshot.id} (#{snapshot.created_at.strftime('%b %-d, %Y')}) for #{snapshot.volume_id} (#{snapshot.volume_size}GB)"
     end
   end
   puts "Clean backups completed in %.1f seconds." % [Time.now - start]
+end
+
+def get_mysql_volume
+  fog = Fog::Compute::AWS.new :use_iam_profile => true
+  # Get the volume holding the MySQL DB. We only have one instance and one EBS volume.
+  volumes = fog.servers.get('<%= node[:opsworks][:instance][:aws_instance_id] %>').volumes
+  # return the first volume, ignoring the 8GB boot volume
+  volumes.reject { |v| v.device=='/dev/sda1' }.first
 end
 
 backup
