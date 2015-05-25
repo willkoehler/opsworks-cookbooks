@@ -1,5 +1,9 @@
 # WCK This file has been customized to add far-future asset headers.
 
+# WCK This file has been customized to disable SSLv3 to mitigate the POODLE attack
+# See http://docs.aws.amazon.com/opsworks/latest/userguide/workinglayers-rails.html
+# Can be removed after https://github.com/aws/opsworks-cookbooks/pull/231 or equivalent is merged.
+
 upstream unicorn_<%= @application[:domains].first %> {
  server unix:<%= @application[:deploy_to]%>/shared/sockets/unicorn.sock fail_timeout=0;
 }
@@ -84,6 +88,7 @@ server {
   <% if @application[:ssl_certificate_ca] -%>
   ssl_client_certificate /etc/nginx/ssl/<%= @application[:domains].first %>.ca;
   <% end -%>
+  ssl_protocols TLSv1 TLSv1.1 TLSv1.2;  # WCK disable SSLv3 to mitigate POODLE attack
 
   keepalive_timeout 5;
 
