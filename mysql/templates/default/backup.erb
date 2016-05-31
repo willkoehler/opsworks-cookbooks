@@ -14,7 +14,7 @@ def backup
   system("sync")
   # Create EBS snapshot.
   volume = get_mysql_volume
-  puts "Creating snapshot of #{volume.id}."
+  puts "Creating snapshot of #{volume.id} on #{Time.now.strftime("%b %e, %Y %l:%M%P")}"
   volume.snapshots.new(description: "Nightly backup of <%= node[:opsworks][:stack][:name] %>").save
   # unlock tables
   client.query("UNLOCK TABLES")
