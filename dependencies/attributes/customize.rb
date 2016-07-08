@@ -1,1 +1,1 @@
-normal[:dependencies][:gems] = { 'fog' => '1.37.0', 'mysql2' => '0.4.3' }
+normal[:dependencies][:gems] = { 'aws-sdk' => '2.3.20', 'mysql2' => '0.4.4' }

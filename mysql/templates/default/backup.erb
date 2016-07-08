@@ -1,48 +1,103 @@
 #!/usr/bin/env ruby
 
-require 'fog'
+require 'aws-sdk'
 require 'mysql2'
+require 'logger'
 
-def backup
-  start = Time.now
-  # Flush and lock all the DB tables. Rails will block on actions that write to the DB
-  # until the tables are unlocked. This should be transparent to web users, aside from
-  # a short delay in the app response time. Entire backup task only takes a few seconds.
-  client = Mysql2::Client.new(username: 'root', password: '<%= node[:mysql][:server_root_password] %>')
-  client.query("FLUSH TABLES WITH READ LOCK")
-  # Fush Ext3 file system cache to disk
-  system("sync")
-  # Create EBS snapshot.
-  volume = get_mysql_volume
-  puts "Creating snapshot of #{volume.id} on #{Time.now.strftime("%b %e, %Y %l:%M%P")}"
-  volume.snapshots.new(description: "Nightly backup of <%= node[:opsworks][:stack][:name] %>").save
-  # unlock tables
-  client.query("UNLOCK TABLES")
-  puts "System backup completed in %.1f seconds." % [Time.now - start]
-end
+REGION = '<%= node[:opsworks][:instance][:region] %>'
+INSTANCE_ID = '<%= node[:opsworks][:instance][:aws_instance_id] %>'
+STACK_NAME = '<%= node[:opsworks][:stack][:name] %>'
+MYSQL_PASSWORD = '<%= node[:mysql][:server_root_password] %>'
+FROM_EMAIL = '<%= node[:backup_notification][:from_email] %>'
+NOTIFICATION_EMAIL = '<%= node[:backup_notification][:email] %>'
+LOG_FILE = '/var/log/aws/opsworks/mysql_backup.log'
 
-def clean
-  start = Time.now
-  fog = Fog::Compute::AWS.new :use_iam_profile => true
-  get_mysql_volume.snapshots.each do |snapshot|
-    # Keep daily snapshots for the last month and then monthly snapshots after that
-    if snapshot.created_at.to_date < (Date.today - 31) && snapshot.created_at.day!=1
-      puts "DELETING #{snapshot.id} (#{snapshot.created_at.strftime('%b %-d, %Y')}) for #{snapshot.volume_id} (#{snapshot.volume_size}GB)"
-      fog.delete_snapshot(snapshot.id)
-    else
-      puts "Keeping #{snapshot.id} (#{snapshot.created_at.strftime('%b %-d, %Y')}) for #{snapshot.volume_id} (#{snapshot.volume_size}GB)"
+class MySQLBackup
+  
+  def initialize
+    @logger = Logger.new(LOG_FILE, 'weekly')
+    @logger.datetime_format = '%Y-%m-%d %H:%M:%S'
+    @results = ''
+  end
+  
+  def run
+    begin
+      @ec2 = Aws::EC2::Client.new(region: REGION)
+      backup
+      clean_old_snapshots
+      email_result("#{STACK_NAME} Backup Completed #{Time.now.strftime("%b %e, %Y %l:%M%P")}", @results)
+    rescue => e
+      @logger.error "#{e.message} (#{e.class.name})\n#{e.backtrace.join("\n")}"
+      email_result("#{STACK_NAME} Backup Failed", "#{e.message} (#{e.class.name})\n\n#{e.backtrace.join("\n")}")
+      raise
     end
   end
-  puts "Clean backups completed in %.1f seconds." % [Time.now - start]
+  
+  private
+
+  def backup
+    start = Time.now
+    # Flush and lock all the DB tables. Rails will block on actions that write to the DB
+    # until the tables are unlocked. This should be transparent to web users, aside from
+    # a short delay in the app response time. Entire backup task only takes a few seconds.
+    client = Mysql2::Client.new(username: 'root', password: MYSQL_PASSWORD)
+    client.query("FLUSH TABLES WITH READ LOCK")
+    # Fush Ext3 file system cache to disk
+    system("sync")
+    # Create EBS snapshot.
+    snapshot = mysql_volume.create_snapshot(description: "Nightly backup of #{STACK_NAME}")
+    # snapshot.wait_until_completed     # this is timing out even though the snapshot completes - see https://github.com/aws/aws-sdk-ruby/issues/978
+    log "Created snapshot of #{mysql_volume.volume_id}"
+    # unlock tables
+    client.query("UNLOCK TABLES")
+    log "System backup completed in %.1f seconds." % [Time.now - start]
+  end
+
+  def clean_old_snapshots
+    start = Time.now
+    mysql_volume.snapshots.each do |snapshot|
+      # Keep daily snapshots for the last month and then monthly snapshots after that
+      if snapshot.start_time.to_date < (Date.today - 31) && snapshot.start_time.day!=1
+        log "DELETING #{snapshot.id} (#{snapshot.start_time.strftime('%b %-d, %Y')}) for #{snapshot.volume_id} (#{snapshot.volume_size}GB)"
+        snapshot.delete
+      else
+        log "Keeping #{snapshot.id} (#{snapshot.start_time.strftime('%b %-d, %Y')}) for #{snapshot.volume_id} (#{snapshot.volume_size}GB)"
+      end
+    end
+    log "Clean backups completed in %.1f seconds." % [Time.now - start]
+  end
+
+  def mysql_volume
+    @mysql_volume || get_mysql_volume
+  end
+
+  def get_mysql_volume
+    # The volume used by MySQL is mounted at /vol/mysql and will have a tag 'opsworks:mount_point' => '/vol/mysql'
+    volume_info = @ec2.describe_volumes({
+      filters: [
+        { name: 'attachment.instance-id', values: [INSTANCE_ID] },
+        { name: 'tag:opsworks:mount_point', values: ['/vol/mysql'] }
+      ],
+    }).volumes.first
+    Aws::EC2::Volume.new(id: volume_info.volume_id, region: REGION)
+  end
+
+  def email_result(subject, body)
+    ses = Aws::SES::Client.new(region: REGION)
+    ses.send_email({
+      source: FROM_EMAIL,
+      destination: { to_addresses: [NOTIFICATION_EMAIL] },
+      message: {
+        subject: { data: subject },
+        body: { text: { data: body } }
+      }
+    })
+  end
+  
+  def log(string)
+    @results << string + "\n"
+    @logger.info string
+  end
 end
 
-def get_mysql_volume
-  fog = Fog::Compute::AWS.new :use_iam_profile => true
-  # Get the volume holding the MySQL DB. We only have one instance and one EBS volume.
-  volumes = fog.servers.get('<%= node[:opsworks][:instance][:aws_instance_id] %>').volumes
-  # return the first volume, ignoring the 8GB boot volume
-  volumes.reject { |v| v.device=='/dev/sda1' }.first
-end
-
-backup
-clean
+MySQLBackup.new.run

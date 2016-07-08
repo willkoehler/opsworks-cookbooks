@@ -7,7 +7,7 @@ end
 cron "backup_mysql" do
   hour "6"
   minute "0"
-  command "/srv/backup >> /var/log/aws/opsworks/backup.log 2>&1"
+  command "/srv/backup"
   path "/usr/local/bin"
   user 'root'
 end
