@@ -16,6 +16,7 @@ node[:deploy].each do |application, deploy|
 end
 
 # reload monit config after changes above
-service 'monit' do
-  action :reload
+# "sleep 2" is to avoid a "Cannot connect to the monit daemon..." error on next call to "monit restart [...]"
+execute "reload monit" do
+  command "monit reload && sleep 2"
 end
