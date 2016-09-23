@@ -1,0 +1,46 @@
+#!/usr/bin/env ruby
+
+require 'aws-sdk'
+require 'sys/filesystem'
+
+REGION = '<%= node[:opsworks][:instance][:region] %>'
+INSTANCE_ID = '<%= node[:opsworks][:instance][:aws_instance_id] %>'
+STACK_NAME = '<%= node[:opsworks][:stack][:name] %>'
+
+class CheckDriveSpace
+  
+  def run
+    @cloud_watch = Aws::CloudWatch::Client.new(region: REGION)
+    check_drive_space
+  end
+  
+  private
+
+  def check_drive_space
+    log_precent_used_for("/")
+    log_precent_used_for("/vol/mysql")
+  end
+  
+  def log_precent_used_for(mount_point)
+    @cloud_watch.put_metric_data({
+      namespace: "OpsWorks",
+      metric_data: [{
+          metric_name: "PercentUsed",
+          dimensions: [
+            { name: 'Stack', value: STACK_NAME },
+            { name: 'InstanceId', value: INSTANCE_ID },
+            { name: 'MountPoint', value: mount_point }
+          ],
+          value: precent_used(mount_point),
+          unit: 'Percent'
+      }]
+    })
+  end
+  
+  def precent_used(mount_point)
+    stat = Sys::Filesystem.stat(mount_point)
+    stat.bytes_used.to_f / stat.bytes_total.to_f * 100
+  end
+end
+
+CheckDriveSpace.new.run
