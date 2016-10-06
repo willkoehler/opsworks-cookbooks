@@ -6,8 +6,9 @@ script 'install ffmpeg' do
   cwd ::Dir.tmpdir
   code <<-EOH
     wget -q #{url} -O #{ffmpeg_file}
-    mkdir -p /usr/local/bin/ffmpeg
-    tar -xJf #{ffmpeg_file} -C /usr/local/bin/ffmpeg --strip-components=1
-    ln -sf /usr/local/bin/ffmpeg/ffmpeg /usr/bin/ffmpeg
+    mkdir -p /opt/ffmpeg
+    tar -xJf #{ffmpeg_file} -C /opt/ffmpeg --strip-components=1 --no-same-owner
+    ln -sf /opt/ffmpeg/ffmpeg /usr/local/bin/ffmpeg
+    ln -sf /opt/ffmpeg/ffprobe /usr/local/bin/ffprobe
   EOH
 end
