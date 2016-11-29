@@ -6,7 +6,7 @@ end
 
 cron "backup_mysql" do
   hour "6"
-  minute "0"
+  minute "32"
   command "/srv/backup"
   path "/usr/local/bin"
   user 'root'
