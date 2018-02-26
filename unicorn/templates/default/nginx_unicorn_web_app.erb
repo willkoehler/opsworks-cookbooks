@@ -89,6 +89,7 @@ server {
   ssl_client_certificate /etc/nginx/ssl/<%= @application[:domains].first %>.ca;
   <% end -%>
   ssl_protocols TLSv1 TLSv1.1 TLSv1.2;  # WCK disable SSLv3 to mitigate POODLE attack
+  ssl_prefer_server_ciphers on;         # WCK enable Forward Secrecy
 
   keepalive_timeout 5;
 
