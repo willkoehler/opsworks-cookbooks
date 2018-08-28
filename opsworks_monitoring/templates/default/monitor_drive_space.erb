@@ -38,6 +38,7 @@ class CheckDriveSpace
   end
   
   def precent_used(mount_point)
+    return 0 unless File.exist?(mount_point)
     stat = Sys::Filesystem.stat(mount_point)
     stat.bytes_used.to_f / stat.bytes_total.to_f * 100
   end
